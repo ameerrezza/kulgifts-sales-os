@@ -955,7 +955,101 @@ function renderMissingHints(){
   // placeholder if future
 }
 
-function renderDashboard(){
+async function fetchLiveData(){
+  const url = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('Network response was not ok');
+    const data = await resp.json();
+    return data;
+  } catch (e) {
+    console.error('Failed to fetch live data:', e);
+    return null;
+  }
+}
+
+// Helper to render dashboard given a submissions array
+function _renderDashboard(submissions){
+  // metrics (based on filtered submissions)
+  const totalSales = submissions.reduce((s,i)=>s+(i.total||0),0);
+  const cashTotal = submissions.reduce((s,i)=>s+(i.cash||0),0);
+  const qrTotal = submissions.reduce((s,i)=>s+(i.qr||0),0);
+  const cardTotal = submissions.reduce((s,i)=>s+(i.card||0),0);
+  const noSalesCount = submissions.filter(s=>s.status==='No Sales Today').length;
+  const lateCount = submissions.filter(s=>s.status==='Late Submission').length;
+  const storesToCheck = STORES.slice();
+  const allToday = submissions.filter(s=>s.date===getToday() && STORES.includes(s.store));
+  const missingCount = storesToCheck.filter(st=>!allToday.find(s=>s.store===st)).length;
+  const submittedStoresCount = STORES.filter(st=>allToday.find(s=>s.store===st)).length;
+  const completionText = `${submittedStoresCount}/${STORES.length} Stores Submitted`;
+  const overview = [
+    {label:'Total Sales Today', value:formatMoney(totalSales)},
+    {label:'Completion', value:completionText},
+    {label:'Missing Submissions', value:missingCount},
+    {label:'No Sales Stores', value:noSalesCount},
+    {label:'Late Submissions', value:lateCount},
+    {label:'Cash Total', value:formatMoney(cashTotal)},
+    {label:'QR / Transfer Total', value:formatMoney(qrTotal)},
+    {label:'Card Total', value:formatMoney(cardTotal)}
+  ];
+  const grid = $('overviewCards');
+  grid.innerHTML = overview.map(o=>`<div class="card"><div class="overview-value">${o.value}</div><div class="overview-label">${o.label}</div></div>`).join('');
+  // table
+  const tbody = $('statusTable').querySelector('tbody');
+  tbody.innerHTML='';
+  const storesToDisplay = STORES.slice();
+  storesToDisplay.forEach(store=>{
+    const subsForStore = allToday.filter(s=>s.store===store).sort((a,b)=>b.submittedAt-a.submittedAt);
+    const latest = subsForStore[0];
+    const tr = document.createElement('tr');
+    const status = latest? latest.status : 'Missing Submission';
+    const total = latest? formatMoney(latest.total||0) : '-';
+    const dateCell = latest? formatDate(latest.date) : '-';
+    const time = latest? latest.time : '-';
+    const proofCount = latest && Array.isArray(latest.proofImages) ? latest.proofImages.length : 0;
+    let statusHtml = '';
+    if(status==='Submitted') statusHtml = `<span class="status-badge status-submitted">Submitted</span>`;
+    else if(status==='Missing Submission') statusHtml = `<span class="status-badge status-missing">Missing</span>`;
+    else if(status==='No Sales Today') statusHtml = `<span class="status-badge status-nosales">No Sale</span>`;
+    else if(status==='Late Submission') statusHtml = `<span class="status-badge status-late">Late</span>`;
+    else statusHtml = `<span class="status-badge status-nosales">${status}</span>`;
+    tr.innerHTML = `
+      <td>${dateCell}</td>
+      <td>${store}</td>
+      <td>${statusHtml}</td>
+      <td>${total}</td>
+      <td>${time}</td>
+      <td>${proofCount}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function renderDashboard(){
+  // Attempt to load live data first
+  const liveData = await fetchLiveData();
+  let submissions = [];
+  if (liveData && Array.isArray(liveData) && liveData.length) {
+    // Transform sheet rows to submission objects expected by _renderDashboard
+    submissions = liveData.map(r => {
+      const store = r['Store'] || r['store'];
+      const date = r['Date'] || r['date'];
+      const cash = parseFloat(r['Cash'] || r['cash']) || 0;
+      const qr = parseFloat(r['QR'] || r['qr']) || 0;
+      const card = parseFloat(r['Card'] || r['card']) || 0;
+      const total = parseFloat(r['Total'] || r['total']) || cash + qr + card;
+      const status = total > 0 ? 'Submitted' : 'No Sale';
+      return { store, date, cash, qr, card, total, status, time: '', proofImages: [] };
+    });
+    alert('Live data loaded from Google Sheet.');
+  } else {
+    alert('Unable to load live data. Showing local backup.');
+    submissions = loadSubmissions();
+  }
+  _renderDashboard(submissions);
+}
+
+function renderDetailedDashboard() {
   // Only include the core 3 stores
   const allToday = loadSubmissions().filter(s=>s.date===getToday() && STORES.includes(s.store));
   const storeFilter = $('exportStore')? $('exportStore').value : 'ALL';
