@@ -915,8 +915,27 @@ async function handleSubmit(e){
     syncMsg = 'Sales saved locally, but Google Sheet sync failed.';
   }
 
+  console.log('Submitting sales...');
   submitBtn.textContent = originalBtnText; submitBtn.disabled = false;
+  console.log(syncMsg.includes('synced') ? 'Google Sheet sync success' : 'Google Sheet sync failed');
   showSaved(item, syncMsg);
+  // Refresh UI with live data
+  console.log('Fetching latest live data...');
+  (async () => {
+    const liveData = await fetchLiveData();
+    if (liveData && Array.isArray(liveData)) {
+      console.log(`Live data received: ${liveData.length} records`);
+      // Re-render dashboard with live data
+      _renderDashboard(liveData);
+    } else {
+      console.warn('Live data fetch failed, using local data');
+      const local = loadSubmissions();
+      _renderDashboard(local);
+    }
+    // Also re-render history view
+    if (typeof renderHistory === 'function') renderHistory();
+    console.log('Dashboard re-rendered');
+  })();
 }
 
 function showSaved(item, syncMsg){
