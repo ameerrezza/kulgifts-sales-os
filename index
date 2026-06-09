@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KUL Gifts — Daily Sales Report</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+  <img src="logo.png" alt="KUL Gifts Logo" class="brand-logo">
+</div>
+    <button id="adminBtn" class="icon-btn" aria-label="Admin">
+  <img src="usericon.png" alt="Admin" class="admin-icon">
+</button>
+  </header>
+
+  <main class="container">
+    <section class="card form-card" id="staffFormCard">
+      <h1 class="title">Daily Sales Report</h1>
+
+      <label class="label">Select Store</label>
+      <select id="storeSelect" class="select">
+        <option value="" selected>Pick your store</option>
+      </select>
+      <div id="storeError" class="error hidden">Please select your store.</div>
+
+      <div id="salesQuestion" class="hidden" style="margin-top:16px;padding-top:16px;border-top:1px solid #f3f4f6;">
+        <div class="label">Did your store make sales today?</div>
+        <div class="radio-row">
+          <label><input type="radio" name="madeSales" value="yes"> Yes, sales today</label>
+          <label><input type="radio" name="madeSales" value="no"> No sales today</label>
+        </div>
+      </div>
+
+      <form id="reportForm" style="margin-top:8px;">
+        <div id="salesFields" class="hidden">
+          <label class="label">Total Sales Today</label>
+          <input type="number" id="totalSales" class="input" min="0" step="0.01" placeholder="0.00">
+          <div id="breakdownFields">
+            <label class="label">Cash Sales</label>
+            <input type="number" id="cashSales" class="input" min="0" step="0.01" placeholder="0.00">
+
+            <label class="label">QR / Transfer Sales</label>
+            <input type="number" id="qrSales" class="input" min="0" step="0.01" placeholder="0.00">
+
+            <label class="label">Card Sales</label>
+            <input type="number" id="cardSales" class="input" min="0" step="0.01" placeholder="0.00">
+          </div>
+
+          <label class="label">Remarks (optional)</label>
+          <textarea id="remarks" class="textarea" placeholder="Notes..."></textarea>
+
+          <div id="proofUpload">
+            <label class="label">Upload Sales Proof Images</label>
+            <input type="file" id="imageInput" accept="image/*" multiple>
+            <div id="imagePreview" class="image-thumbs" aria-hidden="true"></div>
+          </div>
+        </div>
+
+        <div id="b2bFields" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid #f3f4f6;">
+          <label class="label">Client / Company Name (optional)</label>
+          <input type="text" id="clientName" class="input" placeholder="Company name">
+          <label class="label">Quotation Number (optional)</label>
+          <input type="text" id="quotationNo" class="input" placeholder="Quotation #">
+          <label class="label">Invoice Number (optional)</label>
+          <input type="text" id="invoiceNo" class="input" placeholder="Invoice #">
+        </div>
+
+        <div id="noSalesFields" class="hidden">
+          <label class="label">Remarks (optional)</label>
+          <textarea id="noSalesRemarks" class="textarea" placeholder="Notes..."></textarea>
+        </div>
+
+        <div id="errorMsg" class="error hidden">Breakdown does not match total sales.</div>
+
+        <button type="submit" id="submitBtn" class="primary hidden" style="width:100%;margin-top:16px;">Submit Report</button>
+      </form>
+    </section>
+
+    <section class="card" id="thankYouCard" hidden style="text-align:center;">
+      <h2 style="margin:0 0 8px 0;font-size:20px;font-weight:600;">Report saved</h2>
+      <p id="savedText" style="margin:8px 0 16px 0;color:#6b7280;font-size:15px;"></p>
+      <button id="newReportBtn" class="secondary">Submit another report</button>
+    </section>
+
+    <section class="card" id="adminDashboard" hidden style="padding:0;">
+      <div style="padding:24px;border-bottom:1px solid #f3f4f6;">
+        <div class="dashboard-header">
+          <h2>Admin Dashboard</h2>
+          <button id="closeAdmin" class="secondary small">Close</button>
+      </div>
+
+        <!-- Admin Tabs -->
+        <nav class="admin-tabs" role="tablist" aria-label="Admin tabs" style="margin-top:12px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border);">
+          <button id="tabDashboard" class="tab-btn" role="tab" aria-selected="true">Dashboard</button>
+          <button id="tabHistory" class="tab-btn" role="tab" aria-selected="false">Sales History</button>
+          <button id="tabB2B" class="tab-btn" role="tab" aria-selected="false" style="display: none;">B2B Records</button>
+          <button id="tabExisting" class="tab-btn" role="tab" aria-selected="false" style="display: none;">Existing Bookkeeping</button>
+          <button id="tabSettings" class="tab-btn" role="tab" aria-selected="false" style="display: none;">Settings</button>
+        </nav>
+
+      <div style="padding:20px;">
+        <div id="dashboardView">
+          <div id="adminTopFilters" class="admin-tools" style="margin-bottom:16px;padding:12px;background:#f9fafb;border-radius:10px;">
+            <div class="admin-controls-row controls-top" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+              <div style="display:flex;gap:8px;align-items:center;">
+                <label class="label">Range</label>
+                <select id="exportRange" class="select compact">
+                  <option value="today">Today</option>
+                  <option value="this_week">This Week</option>
+                  <option value="this_month">This Month</option>
+                  <option value="custom">Custom Range</option>
+                  <option value="all">All Time</option>
+                </select>
+                <input type="date" id="exportFrom" class="input hidden compact" style="max-width:140px">
+                <input type="date" id="exportTo" class="input hidden compact" style="max-width:140px">
+              </div>
+
+              <div style="display:flex;gap:8px;align-items:center;">
+                <label class="label">Store</label>
+                <select id="exportStore" class="select compact">
+                  <option value="ALL">All Stores</option>
+                </select>
+              </div>
+
+              <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+                <button id="exportRangeBtn" class="secondary">Export CSV</button>
+                <button id="exportAllBtn" class="secondary">Export All CSV</button>
+              </div>
+            </div>
+
+            <!-- import controls removed from top toolbar per workflow decision -->
+          </div>
+          <div id="overviewCards" class="overview-grid"></div>
+
+          <div class="table-wrap" style="margin-top:20px;">
+            <div class="table-inner">
+            <table id="statusTable">
+            <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Store</th>
+                  <th>Status</th>
+                  <th>Total Sales</th>
+                  <th>Submitted Time</th>
+                  <th>Proof</th>
+                  <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          </div>
+          </div>
+        </div>
+
+        <div id="historyView" class="hidden" style="margin-top:16px;">
+          <section class="card admin-section">
+            <h3 style="margin:0 0 12px 0;font-size:18px;font-weight:600">Sales History</h3>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+              <label class="label" style="margin:0;">Store</label>
+              <select id="histStore" class="select compact">
+                <option value="ALL">All Stores</option>
+                <option>Central Market</option>
+                <option>Movenpick Hotel</option>
+                <option>Street Mall</option>
+              </select>
+
+              <label class="label" style="margin:0;">Range</label>
+              <select id="histRange" class="select compact">
+                <option value="today">Today</option>
+                <option value="this_week">This Week</option>
+                <option value="this_month">This Month</option>
+                <option value="this_year">This Year</option>
+                <option value="all" selected>All Time</option>
+                <option value="custom">Custom Range</option>
+              </select>
+              <input type="date" id="histFrom" class="input hidden compact" style="max-width:160px">
+              <input type="date" id="histTo" class="input hidden compact" style="max-width:160px">
+
+              <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button id="histApplyBtn" class="secondary">Apply</button>
+                <button id="openLegacyCsvModal" class="secondary">Import CSV</button>
+                <button id="histExportBtn" class="secondary">Export CSV</button>
+                <button id="addRecordBtn" class="primary" style="margin-top:0;">Add Sales Record</button>
+              </div>
+            </div>
+
+            <div id="historySummary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px"></div>
+
+            <div class="table-wrap">
+              <table id="historyTable">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Store</th>
+                    <th>Total Sales</th>
+                    <th>Status/Remark</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody"></tbody>
+              </table>
+            </div>
+            <div id="historyTableActions" style="text-align: center; margin-top: 16px;">
+              <button id="viewAllHistoryBtn" class="secondary" style="display: none;">View All Records</button>
+              <button id="viewLessHistoryBtn" class="secondary" style="display: none;">Show Latest 5</button>
+            </div>
+          </section>
+        </div>
+
+        <div id="b2bView" class="hidden" style="margin-top:16px;">
+          <section class="card">
+            <h3 style="margin:0 0 12px 0;font-size:18px;font-weight:600">B2B Records</h3>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+              <label class="label" style="margin:0;">Range</label>
+              <select id="b2bRange" class="select compact">
+                <option value="today">Today</option>
+                <option value="this_week">This Week</option>
+                <option value="this_month">This Month</option>
+                <option value="this_year">This Year</option>
+                <option value="all" selected>All Time</option>
+                <option value="custom">Custom Range</option>
+              </select>
+              <input type="date" id="b2bFrom" class="input hidden compact" style="max-width:160px">
+              <input type="date" id="b2bTo" class="input hidden compact" style="max-width:160px">
+
+              <input id="b2bSearch" class="input compact" placeholder="Search client / quotation / invoice" style="max-width:320px;margin-left:8px">
+
+              <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+                <button id="b2bApplyBtn" class="secondary">Apply</button>
+                <button id="b2bExportBtn" class="secondary">Export Filtered CSV</button>
+              </div>
+            </div>
+
+            <div id="b2bSummary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px"></div>
+
+            <div class="table-wrap">
+              <table id="b2bRecordsTable">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Client / Company</th>
+                    <th>Quotation #</th>
+                    <th>Invoice #</th>
+                    <th>Total Amount</th>
+                    <th>Submitted Time</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="b2bTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="existingView" class="hidden" style="margin-top:16px;">
+          <section class="card admin-section">
+            <h3 style="margin:0 0 12px 0;font-size:18px;font-weight:600">Existing Bookkeeping</h3>
+            <div id="legacySummary" class="legacy-summary-grid"></div>
+
+            <!-- 1) Browse Records (Primary) -->
+            <div class="section browse-records" style="margin-bottom:16px">
+              <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+                <div style="flex:1 1 420px;min-width:260px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                    <label class="label" style="margin:0;">Store</label>
+                    <select id="legacyStoreFilter" class="select compact">
+                      <option value="ALL">All Stores</option>
+                      <option>Central Market</option>
+                      <option>Movenpick Hotel</option>
+                      <option>Street Mall</option>
+                    </select>
+                    <label class="label" style="margin:0;">Range</label>
+                    <select id="legacyRange" class="select compact">
+                      <option value="today">Today</option>
+                      <option value="this_week">This Week</option>
+                      <option value="this_month">This Month</option>
+                      <option value="this_year">This Year</option>
+                      <option value="all" selected>All Time</option>
+                      <option value="custom">Custom Range</option>
+                    </select>
+                    <input type="date" id="legacyFrom" class="input hidden compact" style="max-width:140px">
+                    <input type="date" id="legacyTo" class="input hidden compact" style="max-width:140px">
+                  </div>
+                </div>
+
+                <div style="flex:1 1 260px;min-width:220px">
+                  <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+                    <label class="label" style="margin:0;">Sort</label>
+                    <select id="legacySort" class="select compact">
+                      <option value="date_desc">Date newest first</option>
+                      <option value="date_asc">Date oldest first</option>
+                      <option value="sales_desc">Highest sales</option>
+                      <option value="sales_asc">Lowest sales</option>
+                    </select>
+                    <div style="margin-left:auto;display:flex;gap:8px"><button id="legacyApplyBtn" class="secondary">Apply</button></div>
+                  </div>
+                </div>
+              </div>
+
+
+            <!-- Manual entry removed: CSV-only workflow -->
+            <div style="margin-bottom:12px;padding:6px 0;border-radius:10px;">
+              <div style="margin-top:6px">
+                <button id="openLegacyCsvModalOld" class="secondary">Import Historical CSV</button>
+                <span id="legacyCsvMsg" style="color:var(--muted);font-size:13px;margin-left:12px"></span>
+              </div>
+            </div>
+
+            <div class="legacy-actions-bar" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+              <button id="legacyDeleteSelected" class="secondary hidden" disabled onclick="deleteSelectedLegacy()">Delete Selected</button>
+            </div>
+
+            <div class="table-wrap" style="margin-top:16px;">
+              <table id="legacyTable"></table>
+            </div>
+            <div id="legacyPagination" class="legacy-pagination" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end"></div>
+
+            <!-- 3) Bulk CSV Import (Tertiary) -->
+            <!-- CSV import moved to modal; trigger via button above -->
+
+          </section>
+        </div>
+
+        <div id="settingsView" class="hidden" style="margin-top:16px;">
+          <section class="card">
+            <h3 style="margin:0 0 12px 0;font-size:18px;font-weight:600">Settings</h3>
+            <div style="display:grid;grid-template-columns:1fr;gap:12px">
+              <div style="padding:12px;border:1px solid var(--border);border-radius:10px;background:#fff">
+                <h4 style="margin:0 0 8px 0;font-size:15px;font-weight:600">Export Backup</h4>
+                <p style="margin:0 0 8px 0;color:var(--muted);font-size:13px">Export all local records and audit history into a single JSON backup file.</p>
+                <div style="display:flex;gap:8px;justify-content:flex-end">
+                  <button id="exportBackupBtn" class="primary">Export Full Backup</button>
+                </div>
+              </div>
+
+              <div style="padding:12px;border:1px solid #fee2e2;border-radius:10px;background:#fff">
+                <h4 style="margin:0 0 8px 0;font-size:15px;font-weight:600">Reset Local Data</h4>
+                <p style="margin:0 0 8px 0;color:#991b1b;font-size:13px">Warning: This will permanently delete all local data in this browser. This action requires confirmation.</p>
+                <div style="display:flex;gap:8px;justify-content:flex-end">
+                  <button id="resetDataBtn" class="secondary">Reset Data</button>
+                </div>
+              </div>
+
+              <div style="padding:12px;border:1px solid var(--border);border-radius:10px;background:#fff">
+                <h4 style="margin:0 0 8px 0;font-size:15px;font-weight:600">System Information</h4>
+                <div id="systemInfo" style="color:var(--muted);font-size:14px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                  <div>Total live submissions:</div><div id="sys_live">-</div>
+                  <div>Total bookkeeping records:</div><div id="sys_book">-</div>
+                  <div>Total B2B records:</div><div id="sys_b2b">-</div>
+                  <div>LocalStorage usage (approx):</div><div id="sys_storage">-</div>
+                  <div>Last backup export:</div><div id="sys_backup">-</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+  <!-- Reset confirmation modal -->
+  <div id="resetModal" class="modal hidden">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="resetTitle">
+      <div class="modal-body">
+        <h3 id="resetTitle">Confirm Reset Local Data</h3>
+        <p style="color:#374151">This action will permanently remove all local app data stored in your browser. This cannot be undone.</p>
+        <label class="label" style="margin-top:12px">Type <strong>DELETE</strong> to confirm</label>
+        <input id="resetConfirmText" class="input" placeholder="Type DELETE">
+        <label class="label" style="margin-top:8px">Admin Passcode</label>
+        <input id="resetAdminPass" type="password" class="input" placeholder="Enter admin passcode">
+        <div style="margin-top:8px;color:var(--muted);font-size:13px">You will be asked to confirm a second time.</div>
+      </div>
+      <div class="modal-footer">
+        <button id="resetCancel" class="secondary">Cancel</button>
+        <button id="resetConfirmBtn" class="primary">Confirm Reset</button>
+      </div>
+    </div>
+  </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Admin password modal -->
+  <div id="adminModal" class="modal hidden">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+      <div class="modal-body" style="padding:8px 0 0 0">
+        <h3 id="adminTitle">Admin Access</h3>
+        <label class="label">Passcode</label>
+        <input id="adminPass" type="password" class="input" placeholder="Enter passcode" autofocus>
+        <div id="adminErr" class="error hidden">Incorrect passcode</div>
+      </div>
+      <div class="modal-footer modal-actions">
+        <button id="adminCancel" class="secondary">Cancel</button>
+        <button id="adminEnter" class="primary">Enter</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Legacy CSV Import Modal -->
+  <div id="legacyCsvModal" class="modal hidden">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="legacyCsvTitle">
+      <div class="modal-body">
+        <h3 id="legacyCsvTitle">Import CSV</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <input type="file" id="legacyCsvFile" accept="text/csv" class="compact">
+          <button id="legacyCsvPreviewBtn" class="secondary">Preview</button>
+          <div id="legacyCsvMsg" style="color:var(--muted);font-size:13px;margin-left:8px"></div>
+        </div>
+        <div id="legacyCsvPreview" style="max-height:320px;overflow:auto;border-top:1px solid var(--border);padding-top:10px"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="legacyCsvCancel" class="secondary">Cancel</button>
+        <button id="legacyCsvConfirm" class="primary" disabled>Confirm Import</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- View/Edit modal -->
+  <div id="editModal" class="modal hidden">
+    <div class="modal-card" id="editCard" style="max-width:600px;">
+      <div class="modal-body" id="editCardBody"></div>
+      <div class="modal-footer" id="editCardFooter"></div>
+    </div>
+  </div>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
