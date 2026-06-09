@@ -947,11 +947,19 @@ function adminEnter(){
 }
 
 function openAdmin(){
-  $('adminDashboard').hidden=false; $('staffFormCard').classList.add('hidden'); renderDashboard();
+  // Persist admin view state
+  localStorage.setItem('currentView', 'admin');
+  $('adminDashboard').hidden = false;
+  $('staffFormCard').classList.add('hidden');
+  renderDashboard();
 }
 
 function closeAdmin(){
-  $('adminDashboard').hidden=true; $('staffFormCard').classList.remove('hidden'); $('historyPanel').classList.add('hidden');
+  // Persist staff view state
+  localStorage.setItem('currentView', 'staff');
+  $('adminDashboard').hidden = true;
+  $('staffFormCard').classList.remove('hidden');
+  $('historyPanel').classList.add('hidden');
 }
 
 function renderMissingHints(){
