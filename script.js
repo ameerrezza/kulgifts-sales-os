@@ -1059,27 +1059,6 @@ async function renderDashboard(){
   }
   _renderDashboard(submissions);
 }
-  // Attempt to load live data first
-  const liveData = await fetchLiveData();
-  let submissions = [];
-      // Show non-blocking status badge for successful sync
-      const statusEl = document.getElementById('liveStatus');
-      if (statusEl) {
-        statusEl.textContent = 'Live data synced';
-        statusEl.classList.remove('hidden');
-      }
-    } else {
-      // Keep error alert and clear status badge
-      alert('Unable to load live data. Showing local backup.');
-      const statusEl = document.getElementById('liveStatus');
-      if (statusEl) {
-        statusEl.textContent = '';
-        statusEl.classList.add('hidden');
-      }
-    }
-    _renderDashboard(submissions);
-  }
-
 
 function renderDetailedDashboard() {
   // Only include the core 3 stores
