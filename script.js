@@ -9,8 +9,11 @@ let historyShowAll = false;
 function $(id){return document.getElementById(id)}
 
 function getToday(){
-  const d = new Date();
-  return d.toISOString().slice(0,10);
+  // Return today's date in Malaysia timezone (Asia/Kuala_Lumpur) as YYYY-MM-DD
+  const tz = 'Asia/Kuala_Lumpur';
+  const formatter = new Intl.DateTimeFormat('en-CA', {timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'});
+  const [{value: year},,{value: month},,{value: day}] = formatter.formatToParts(new Date());
+  return `${year}-${month}-${day}`;
 }
 
 function timeNow(){
@@ -970,17 +973,20 @@ async function fetchLiveData(){
 
 // Helper to render dashboard given a submissions array
 function _renderDashboard(submissions){
-  // metrics (based on filtered submissions)
-  const totalSales = submissions.reduce((s,i)=>s+(i.total||0),0);
-  const cashTotal = submissions.reduce((s,i)=>s+(i.cash||0),0);
-  const qrTotal = submissions.reduce((s,i)=>s+(i.qr||0),0);
-  const cardTotal = submissions.reduce((s,i)=>s+(i.card||0),0);
-  const noSalesCount = submissions.filter(s=>s.status==='No Sales Today').length;
-  const lateCount = submissions.filter(s=>s.status==='Late Submission').length;
+  // Filter submissions for today's date (Malaysia timezone)
+  const todayStr = getToday();
+  const todaySubs = submissions.filter(s => s.date === todayStr && STORES.includes(s.store));
+
+  // metrics based on today's submissions
+  const totalSales = todaySubs.reduce((s,i)=>s+(i.total||0),0);
+  const cashTotal = todaySubs.reduce((s,i)=>s+(i.cash||0),0);
+  const qrTotal = todaySubs.reduce((s,i)=>s+(i.qr||0),0);
+  const cardTotal = todaySubs.reduce((s,i)=>s+(i.card||0),0);
+  const noSalesCount = todaySubs.filter(s=>s.status==='No Sales Today').length;
+  const lateCount = todaySubs.filter(s=>s.status==='Late Submission').length;
   const storesToCheck = STORES.slice();
-  const allToday = submissions.filter(s=>s.date===getToday() && STORES.includes(s.store));
-  const missingCount = storesToCheck.filter(st=>!allToday.find(s=>s.store===st)).length;
-  const submittedStoresCount = STORES.filter(st=>allToday.find(s=>s.store===st)).length;
+  const missingCount = storesToCheck.filter(st=>!todaySubs.find(s=>s.store===st)).length;
+  const submittedStoresCount = STORES.filter(st=>todaySubs.find(s=>s.store===st)).length;
   const completionText = `${submittedStoresCount}/${STORES.length} Stores Submitted`;
   const overview = [
     {label:'Total Sales Today', value:formatMoney(totalSales)},
@@ -994,9 +1000,7 @@ function _renderDashboard(submissions){
   ];
   const grid = $('overviewCards');
   grid.innerHTML = overview.map(o=>`<div class="card"><div class="overview-value">${o.value}</div><div class="overview-label">${o.label}</div></div>`).join('');
-  // table
-  const tbody = $('statusTable').querySelector('tbody');
-  tbody.innerHTML='';
+  // table rendering unchanged below
   const storesToDisplay = STORES.slice();
   storesToDisplay.forEach(store=>{
     const subsForStore = allToday.filter(s=>s.store===store).sort((a,b)=>b.submittedAt-a.submittedAt);
