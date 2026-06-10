@@ -2,7 +2,10 @@ const STORES = ['Central Market','Movenpick Hotel','Street Mall'];
 const STORAGE_KEY = 'kul_submissions_v1';
 const ADMIN_PASS = '1234';
 const LEGACY_PAGE_SIZE = 5;
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
 let legacyPage = 1;
+// Cache of live Google Sheet rows fetched via doGet; null means not yet fetched
+let _liveDataCache = null;
 let legacySelectedIds = new Set();
 let historyShowAll = false;
 
@@ -894,14 +897,13 @@ async function handleSubmit(e){
 
   const gasUrl = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
   const payload = {
-    date: date,
     store: store,
-    cash: cash,
-    qr: qr,
-    card: card,
-    remarks: remarks
+    cash: Number(cash) || 0,
+    qr: Number(qr) || 0,
+    card: Number(card) || 0,
+    remarks: remarks || ''
   };
-
+  console.log('SUBMIT PAYLOAD', payload);
   let syncMsg = '';
   try {
     const response = await fetch(gasUrl, {
@@ -919,22 +921,12 @@ async function handleSubmit(e){
   submitBtn.textContent = originalBtnText; submitBtn.disabled = false;
   console.log(syncMsg.includes('synced') ? 'Google Sheet sync success' : 'Google Sheet sync failed');
   showSaved(item, syncMsg);
-  // Refresh UI with live data
-  console.log('Fetching latest live data...');
+  // Refresh admin dashboard with latest live data (full fetch + normalize)
+  console.log('Fetching latest live data after submit...');
   (async () => {
-    const liveData = await fetchLiveData();
-    if (liveData && Array.isArray(liveData)) {
-      console.log(`Live data received: ${liveData.length} records`);
-      // Re-render dashboard with live data
-      _renderDashboard(liveData);
-    } else {
-      console.warn('Live data fetch failed, using local data');
-      const local = loadSubmissions();
-      _renderDashboard(local);
-    }
-    // Also re-render history view
-    if (typeof renderHistory === 'function') renderHistory();
-    console.log('Dashboard re-rendered');
+    await renderDashboard();
+    renderHistory();
+    console.log('Dashboard re-rendered after submit');
   })();
 }
 
@@ -970,7 +962,11 @@ function openAdmin(){
   localStorage.setItem('currentView', 'admin');
   $('adminDashboard').hidden = false;
   $('staffFormCard').classList.add('hidden');
-  renderDashboard();
+  // Fetch live data from Google Sheets then render dashboard and history
+  (async () => {
+    await renderDashboard();
+    renderHistory();
+  })();
 }
 
 function closeAdmin(){
@@ -985,199 +981,300 @@ function renderMissingHints(){
   // placeholder if future
 }
 
+// Normalize a date value from Google Sheets to YYYY-MM-DD string.
+// Sheets may serialize Date objects as full strings like "Wed Jun 10 2026 00:00:00 GMT+0800"
+// or already return "2026-06-10". This handles both.
+function normalizeSheetDate(val){
+  if(!val) return '';
+  const s = String(val).trim();
+  // already ISO date
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // try parsing as a date string
+  try{
+    const d = new Date(s);
+    if(!isNaN(d.getTime())){
+      // format in Malaysia timezone
+      const tz = 'Asia/Kuala_Lumpur';
+      const fmt = new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'});
+      const parts = fmt.formatToParts(d);
+      const y = parts.find(p=>p.type==='year').value;
+      const m = parts.find(p=>p.type==='month').value;
+      const dd = parts.find(p=>p.type==='day').value;
+      return `${y}-${m}-${dd}`;
+    }
+  }catch(e){}
+  return s;
+}
+
+// Helper to fetch a value from a sheet row object using flexible header matching.
+// Accepts either a single name or array of candidate names (case-insensitive, trimmed).
+function getRowField(row, names){
+  if(!row) return undefined;
+  const candidates = Array.isArray(names)? names : [names];
+  const normCandidates = candidates.map(c=>String(c||'').toLowerCase().trim());
+  const keys = Object.keys(row||{});
+  for(const k of keys){
+    const nk = String(k||'').toLowerCase().trim();
+    if(normCandidates.includes(nk)) return row[k];
+  }
+  return undefined;
+}
+
 async function fetchLiveData(){
   const url = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
   try {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Network response was not ok');
     const data = await resp.json();
-    return data;
+    console.log('fetchLiveData raw response:', data);
+    if(Array.isArray(data)){
+      // Normalize dates in every row
+      data.forEach(row => {
+        console.log('fetchLiveData row keys:', Object.keys(row));
+        // normalize any date-like fields found
+        const d = getRowField(row, ['Date','date']);
+        if(d) {
+          const norm = normalizeSheetDate(d);
+          // write back to same key name if exists, otherwise add 'date'
+          if(row.hasOwnProperty('Date')) row['Date'] = norm;
+          else if(row.hasOwnProperty('date')) row['date'] = norm;
+          else row['date'] = norm;
+          console.log('normalized date for row ->', norm);
+        }
+      });
+      return data;
+    }
+    return null;
   } catch (e) {
     console.error('Failed to fetch live data:', e);
     return null;
   }
 }
 
-// Helper to render dashboard given a submissions array
+// Render the dashboard store-status table and overview cards.
+// submissions = array of normalized objects with lowercase keys: .date .store .total .cash .qr .card .status .time .proofImages
 function _renderDashboard(submissions){
-  // Filter submissions for today's date (Malaysia timezone)
-  const todayStr = getToday();
-  const todaySubs = submissions.filter(s => s.date === todayStr && STORES.includes(s.store));
+  // Normalize incoming submissions to canonical shape
+  submissions = (submissions||[]).map(ensureMapped).filter(s=>s!==null);
+  // Ensure all dates are normalized to Malaysia YYYY-MM-DD for reliable comparisons
+  submissions = submissions.map(s=>{ s.date = normalizeSheetDate(s.date); return s; });
 
-  // metrics based on today's submissions
-  const totalSales = todaySubs.reduce((s,i)=>s+(i.total||0),0);
-  const cashTotal = todaySubs.reduce((s,i)=>s+(i.cash||0),0);
-  const qrTotal = todaySubs.reduce((s,i)=>s+(i.qr||0),0);
-  const cardTotal = todaySubs.reduce((s,i)=>s+(i.card||0),0);
-  const noSalesCount = todaySubs.filter(s=>s.status==='No Sales Today').length;
-  const lateCount = todaySubs.filter(s=>s.status==='Late Submission').length;
-  const storesToCheck = STORES.slice();
-  const missingCount = storesToCheck.filter(st=>!todaySubs.find(s=>s.store===st)).length;
-  const submittedStoresCount = STORES.filter(st=>todaySubs.find(s=>s.store===st)).length;
+  // Determine filter range from the dashboard controls (exportRange / exportFrom / exportTo)
+  const exportRangeEl = document.getElementById('exportRange');
+  const exportStoreEl = document.getElementById('exportStore');
+  const rangeVal = exportRangeEl ? exportRangeEl.value : 'today';
+  const rangeFrom = (exportRangeEl && rangeVal==='custom' && document.getElementById('exportFrom')) ? document.getElementById('exportFrom').value : null;
+  const rangeTo = (exportRangeEl && rangeVal==='custom' && document.getElementById('exportTo')) ? document.getElementById('exportTo').value : null;
+
+  let rangeStart = null; let rangeEnd = null;
+  if(rangeVal==='today'){ rangeStart = rangeEnd = getToday(); }
+  else if(rangeVal==='this_week'){ const w = currentWeekRange(); rangeStart = w[0]; rangeEnd = w[1]; }
+  else if(rangeVal==='this_month'){ const m = currentMonthRange(); rangeStart = m[0]; rangeEnd = m[1]; }
+  else if(rangeVal==='all'){ rangeStart = null; rangeEnd = null; }
+  else if(rangeVal==='custom' && rangeFrom && rangeTo){ rangeStart = rangeFrom; rangeEnd = rangeTo; }
+  else { rangeStart = rangeEnd = getToday(); }
+
+  // Helper to test whether a date is within the selected range (inclusive). If no range, always true.
+  function inRange(dateStr){ if(!dateStr) return false; if(!rangeStart || !rangeEnd) return true; return dateStr >= rangeStart && dateStr <= rangeEnd; }
+
+  // ── Overview cards ──────────────────────────────────────
+  // Use submissions within the selected range for overview calculations
+  const rangeSubs = submissions.filter(s => inRange(s.date) && STORES.some(st => String(s.store||'').trim().toLowerCase() === String(st).toLowerCase()));
+  const totalSales = rangeSubs.reduce((s,i)=>s+(i.total||0),0);
+  const cashTotal  = rangeSubs.reduce((s,i)=>s+(i.cash||0),0);
+  const qrTotal    = rangeSubs.reduce((s,i)=>s+(i.qr||0),0);
+  const cardTotal  = rangeSubs.reduce((s,i)=>s+(i.card||0),0);
+  const noSalesCount = rangeSubs.filter(s=>s.status==='No Sales Today').length;
+  const lateCount    = rangeSubs.filter(s=>s.status==='Late Submission').length;
+  const submittedStoresCount = STORES.filter(st=>rangeSubs.find(s=> String(s.store||'').trim().toLowerCase()===String(st).toLowerCase())).length;
+  const missingCount = STORES.length - submittedStoresCount;
   const completionText = `${submittedStoresCount}/${STORES.length} Stores Submitted`;
+
   const overview = [
-    {label:'Total Sales Today', value:formatMoney(totalSales)},
-    {label:'Completion', value:completionText},
-    {label:'Missing Submissions', value:missingCount},
-    {label:'No Sales Stores', value:noSalesCount},
-    {label:'Late Submissions', value:lateCount},
-    {label:'Cash Total', value:formatMoney(cashTotal)},
-    {label:'QR / Transfer Total', value:formatMoney(qrTotal)},
-    {label:'Card Total', value:formatMoney(cardTotal)}
+    {label:'Total Sales Today',    value:formatMoney(totalSales)},
+    {label:'Completion',           value:completionText},
+    {label:'Missing Submissions',  value:missingCount},
+    {label:'No Sales Stores',      value:noSalesCount},
+    {label:'Late Submissions',     value:lateCount},
+    {label:'Cash Total',           value:formatMoney(cashTotal)},
+    {label:'QR / Transfer Total',  value:formatMoney(qrTotal)},
+    {label:'Card Total',           value:formatMoney(cardTotal)}
   ];
   const grid = $('overviewCards');
-  grid.innerHTML = overview.map(o=>`<div class="card"><div class="overview-value">${o.value}</div><div class="overview-label">${o.label}</div></div>`).join('');
-  // table rendering unchanged below
-  const storesToDisplay = STORES.slice();
-  storesToDisplay.forEach(store=>{
-    const subsForStore = allToday.filter(s=>s.store===store).sort((a,b)=>b.submittedAt-a.submittedAt);
-    const latest = subsForStore[0];
+  if(grid) grid.innerHTML = overview.map(o=>`<div class="card"><div class="overview-value">${o.value}</div><div class="overview-label">${o.label}</div></div>`).join('');
+
+  // ── Store status table ───────────────────────────────────
+  const tableEl = $('statusTable');
+  if(!tableEl) return; // guard: dashboard may not be visible yet
+  const tbody = tableEl.querySelector('tbody');
+  if(!tbody) return;
+  // ensure table wrapper visible
+  const tableWrapEl = tableEl.closest('.table-wrap'); if(tableWrapEl) tableWrapEl.style.display = '';
+  tbody.innerHTML = '';
+
+  // Always render ALL 3 stores, even when no submission exists
+  STORES.forEach(store => {
+    // latest submission for today (used for status/totals/time)
+    // submissions within the selected range for this store
+    const subsForStoreInRange = submissions
+      .filter(s => {
+        const sname = String(s.store||'').trim();
+        return sname.toLowerCase() === String(store).toLowerCase() && inRange(s.date);
+      })
+      .sort((a,b) => ((b.submittedAt||0) - (a.submittedAt||0)));
+    const latestInRange = subsForStoreInRange[0] || null;
+
+    // Determine status per rules:
+    // 1) If any record exists in range with total > 0 => Submitted
+    // 2) Else if any record exists in range with total == 0 => No Sales Today
+    // 3) Else => Missing Submission
+    let status = 'Missing Submission';
+    if(subsForStoreInRange.length > 0){
+      const anyPositive = subsForStoreInRange.some(x => Number(x.total||0) > 0);
+      const anyZero = subsForStoreInRange.some(x => Number(x.total||0) === 0);
+      if(anyPositive) status = 'Submitted';
+      else if(anyZero) status = 'No Sales Today';
+      else status = 'Submitted';
+    }
+
+    const total = latestInRange ? formatMoney(latestInRange.total||0) : '-';
+    const dateCell = latestInRange ? formatDate(latestInRange.date) : '-';
+    const time = latestInRange ? (latestInRange.time || '-') : '-';
+    const proofCount = (latestInRange && Array.isArray(latestInRange.proofImages)) ? latestInRange.proofImages.length : 0;
+
+    let statusHtml;
+    if     (status === 'Submitted')         statusHtml = `<span class="status-badge status-submitted">Submitted</span>`;
+    else if(status === 'Missing Submission') statusHtml = `<span class="status-badge status-missing">Missing</span>`;
+    else if(status === 'No Sales Today')     statusHtml = `<span class="status-badge status-nosales">No Sale</span>`;
+    else if(status === 'Late Submission')    statusHtml = `<span class="status-badge status-late">Late</span>`;
+    else                                     statusHtml = `<span class="status-badge status-nosales">${status}</span>`;
+
+    const proofCell = proofCount > 0
+      ? `<span class="proof-label">${proofCount} image${proofCount>1?'s':''}</span>`
+      : `-`;
+
     const tr = document.createElement('tr');
-    const status = latest? latest.status : 'Missing Submission';
-    const total = latest? formatMoney(latest.total||0) : '-';
-    const dateCell = latest? formatDate(latest.date) : '-';
-    const time = latest? latest.time : '-';
-    const proofCount = latest && Array.isArray(latest.proofImages) ? latest.proofImages.length : 0;
-    let statusHtml = '';
-    if(status==='Submitted') statusHtml = `<span class="status-badge status-submitted">Submitted</span>`;
-    else if(status==='Missing Submission') statusHtml = `<span class="status-badge status-missing">Missing</span>`;
-    else if(status==='No Sales Today') statusHtml = `<span class="status-badge status-nosales">No Sale</span>`;
-    else if(status==='Late Submission') statusHtml = `<span class="status-badge status-late">Late</span>`;
-    else statusHtml = `<span class="status-badge status-nosales">${status}</span>`;
+    // Debug log: show which submission (if any) matched this store
+    try{
+      console.log('STORE RENDER', {storeName: store, latestInRange});
+    }catch(e){ console.log('STORE RENDER ERROR', e); }
     tr.innerHTML = `
       <td>${dateCell}</td>
       <td>${store}</td>
       <td>${statusHtml}</td>
       <td>${total}</td>
       <td>${time}</td>
-      <td>${proofCount}</td>
     `;
     tbody.appendChild(tr);
   });
 }
 
+// Strict mapper: convert a Google Sheets row into the canonical submission object.
+// Returns null if required fields (Date, Store) are missing or invalid.
+function mapSheetRow(r){
+  if(!r || typeof r !== 'object') return null;
+  // Read only from the official header names per spec
+  const dateRaw = (r['Date'] !== undefined) ? r['Date'] : (r['date'] !== undefined ? r['date'] : '');
+  const storeRaw = (r['Store'] !== undefined) ? r['Store'] : (r['store'] !== undefined ? r['store'] : '');
+  if(!dateRaw || String(dateRaw).toString().trim()==='') return null;
+  if(!storeRaw || String(storeRaw).toString().trim()==='') return null;
+
+  const date = normalizeSheetDate(dateRaw);
+  if(!date) return null;
+
+  const store = String(storeRaw).trim();
+  const cash = parseFloat(r['Cash'] !== undefined ? r['Cash'] : (r['cash'] !== undefined ? r['cash'] : 0)) || 0;
+  const qr = parseFloat(r['QR'] !== undefined ? r['QR'] : (r['qr'] !== undefined ? r['qr'] : 0)) || 0;
+  const card = parseFloat(r['Card'] !== undefined ? r['Card'] : (r['card'] !== undefined ? r['card'] : 0)) || 0;
+  const total = parseFloat(r['Total'] !== undefined ? r['Total'] : (r['total'] !== undefined ? r['total'] : '')) || (cash + qr + card);
+  const remarks = String(r['Remarks'] !== undefined ? r['Remarks'] : (r['remarks'] !== undefined ? r['remarks'] : '')).trim();
+
+  // Submitted At should come only from 'Submitted At'
+  let submittedAt = 0;
+  let time = '';
+  const submittedAtRaw = (r['Submitted At'] !== undefined) ? r['Submitted At'] : (r['submittedAt'] !== undefined ? r['submittedAt'] : '');
+  if(submittedAtRaw){
+    const d = new Date(submittedAtRaw);
+    if(!isNaN(d.getTime())){ submittedAt = d.getTime(); time = d.toTimeString().slice(0,8); }
+  }
+
+  const status = total > 0 ? 'Submitted' : 'No Sales Today';
+  const mapped = { store, date, cash, qr, card, total, remarks, status, time, submittedAt, proofImages: [], _fromSheet: true };
+  if(r['rowNumber'] !== undefined) mapped.rowNumber = Number(r['rowNumber']);
+  else if(r.rowNumber !== undefined) mapped.rowNumber = Number(r.rowNumber);
+  return mapped;
+}
+
+// Ensure a row is in the canonical mapped shape. If already mapped, return as-is.
+// If it's a raw sheet row (Date/Store/Total...), attempt to map it via mapSheetRow.
+function ensureMapped(row){
+  if(!row || typeof row !== 'object') return null;
+  // already mapped
+  if(row.date !== undefined && row.store !== undefined) return row;
+  // try strict mapping from sheet-style keys
+  const mapped = mapSheetRow(row);
+  if(mapped) return mapped;
+  // best-effort: try to pick lowercase variants
+  const tryObj = {
+    date: row.date || row.Date || row[''] || '',
+    store: row.store || row.Store || '',
+    cash: parseFloat(row.cash || row.Cash || 0) || 0,
+    qr: parseFloat(row.qr || row.QR || 0) || 0,
+    card: parseFloat(row.card || row.Card || 0) || 0,
+    total: parseFloat(row.total || row.Total || '') || 0,
+    remarks: String(row.remarks || row.Remarks || '').trim(),
+    submittedAt: row.submittedAt || row['Submitted At'] || 0
+  };
+  if(!tryObj.date || !tryObj.store) return null;
+  // normalize date and submittedAt/time
+  tryObj.date = normalizeSheetDate(tryObj.date);
+  if(tryObj.submittedAt){ const d = new Date(tryObj.submittedAt); if(!isNaN(d.getTime())) tryObj.submittedAt = d.getTime(); else tryObj.submittedAt = 0; }
+  tryObj.time = tryObj.submittedAt ? new Date(tryObj.submittedAt).toTimeString().slice(0,8) : '';
+  tryObj.status = (tryObj.total && Number(tryObj.total) > 0) ? 'Submitted' : 'No Sales Today';
+  tryObj.proofImages = [];
+  tryObj._fromSheet = true;
+  return tryObj;
+}
+
 async function renderDashboard(){
-  // Attempt to load live data first
+  // Attempt to load live data from Google Sheets first
   const liveData = await fetchLiveData();
   let submissions = [];
-  if (liveData && Array.isArray(liveData) && liveData.length) {
-    // Transform sheet rows to submission objects expected by _renderDashboard
-    submissions = liveData.map(r => {
-      const store = r['Store'] || r['store'];
-      const date = r['Date'] || r['date'];
-      const cash = parseFloat(r['Cash'] || r['cash']) || 0;
-      const qr = parseFloat(r['QR'] || r['qr']) || 0;
-      const card = parseFloat(r['Card'] || r['card']) || 0;
-      const total = parseFloat(r['Total'] || r['total']) || cash + qr + card;
-      const status = total > 0 ? 'Submitted' : 'No Sale';
-      return { store, date, cash, qr, card, total, status, time: '', proofImages: [] };
-    });
-    // Show non-blocking status badge for successful sync
-    const statusEl = document.getElementById('liveStatus');
+  const statusEl = document.getElementById('liveStatus');
+  if (liveData && Array.isArray(liveData)) {
+    // Cache live data globally so other views (Sales History) can use it
+    console.log('renderDashboard raw liveData:', liveData);
+    _liveDataCache = liveData.map(mapSheetRow).filter(r=>r!==null);
+    console.log('_liveDataCache after mapping:', _liveDataCache);
+    // Log one mapped row per requested store to inspect exact object shape
+    try{
+      const sm = _liveDataCache.find(x=>String(x.store||'')==='Street Mall');
+      const cm = _liveDataCache.find(x=>String(x.store||'')==='Central Market');
+      if(sm) console.log('MAPPED ROW Street Mall', sm);
+      if(cm) console.log('MAPPED ROW Central Market', cm);
+    }catch(e){ console.log('Error logging mapped rows', e); }
+    submissions = _liveDataCache;
     if (statusEl) {
-      statusEl.textContent = 'Live data synced';
+      statusEl.textContent = '✓ Live data synced';
+      statusEl.style.background = '#d1fae5';
+      statusEl.style.color = '#065f46';
       statusEl.classList.remove('hidden');
     }
   } else {
-    // Keep error alert and clear status badge
-    alert('Unable to load live data. Showing local backup.');
-    const statusEl = document.getElementById('liveStatus');
+    // Silent fallback to localStorage — no alert
+    console.warn('Live data unavailable — showing local backup');
     if (statusEl) {
-      statusEl.textContent = '';
-      statusEl.classList.add('hidden');
+      statusEl.textContent = '⚠ Offline — local data';
+      statusEl.style.background = '#fef3c7';
+      statusEl.style.color = '#92400e';
+      statusEl.classList.remove('hidden');
     }
     submissions = loadSubmissions();
   }
   _renderDashboard(submissions);
 }
 
-function renderDetailedDashboard() {
-  // Only include the core 3 stores
-  const allToday = loadSubmissions().filter(s=>s.date===getToday() && STORES.includes(s.store));
-  const storeFilter = $('exportStore')? $('exportStore').value : 'ALL';
-  const submissions = (storeFilter && storeFilter!=='ALL') ? allToday.filter(s=>s.store===storeFilter) : allToday;
-  // metrics (based on filtered submissions)
-  const totalSales = submissions.reduce((s,i)=>s+(i.total||0),0);
-  const cashTotal = submissions.reduce((s,i)=>s+(i.cash||0),0);
-  const qrTotal = submissions.reduce((s,i)=>s+(i.qr||0),0);
-  const cardTotal = submissions.reduce((s,i)=>s+(i.card||0),0);
-  const noSalesCount = submissions.filter(s=>s.status==='No Sales Today').length;
-  const lateCount = submissions.filter(s=>s.status==='Late Submission').length;
-  // missing submissions should consider selected stores only
-  const storesToCheck = (storeFilter && storeFilter!=='ALL') ? [storeFilter] : STORES.slice();
-  const missingCount = storesToCheck.filter(st=>!allToday.find(s=>s.store===st)).length;
-
-  // Recalculate completion
-  const submittedStoresCount = STORES.filter(st=>allToday.find(s=>s.store===st)).length;
-  const completionText = `${submittedStoresCount}/${STORES.length} Stores Submitted`;
-
-  const overview = [
-    {label:'Total Sales Today', value:formatMoney(totalSales)},
-    {label:'Completion', value:completionText},
-    {label:'Missing Submissions', value:missingCount},
-    {label:'No Sales Stores', value:noSalesCount},
-    {label:'Late Submissions', value:lateCount},
-    {label:'Cash Total', value:formatMoney(cashTotal)},
-    {label:'QR / Transfer Total', value:formatMoney(qrTotal)},
-    {label:'Card Total', value:formatMoney(cardTotal)}
-  ];
-
-  const grid = $('overviewCards'); grid.innerHTML = overview.map(o=>`<div class="card"><div class="overview-value">${o.value}</div><div class="overview-label">${o.label}</div></div>`).join('');
-
-  // table
-  const tbody = $('statusTable').querySelector('tbody'); tbody.innerHTML='';
-  const storesToDisplay = (storeFilter && storeFilter!=='ALL') ? [storeFilter] : STORES.slice();
-  storesToDisplay.forEach(store=>{
-    const subsForStore = allToday.filter(s=>s.store===store).sort((a,b)=>b.submittedAt-a.submittedAt);
-    const latest = subsForStore[0];
-    const tr = document.createElement('tr');
-    const status = latest? latest.status : 'Missing Submission';
-    const total = latest? formatMoney(latest.total||0) : '-';
-    const dateCell = latest? formatDate(latest.date) : '-';
-    const time = latest? latest.time : '-';
-    const proofCount = latest && Array.isArray(latest.proofImages) ? latest.proofImages.length : 0;
-    // status badge mapping
-    let statusHtml = '';
-    if(status==='Submitted') statusHtml = `<span class="status-badge status-submitted">Submitted</span>`;
-    else if(status==='Missing Submission') statusHtml = `<span class="status-badge status-missing">Missing</span>`;
-    else if(status==='No Sales Today') statusHtml = `<span class="status-badge status-nosales">No Sales</span>`;
-    else if(status==='Late Submission') statusHtml = `<span class="status-badge status-late">Late</span>`;
-    else statusHtml = `<span class="status-badge status-nosales">${status}</span>`;
-    // Customize cells for TikTok and B2B
-    let storeCell = store;
-    let proofCell = '';
-    if(store==='TikTok'){
-      // TikTok: single amount entry only; hide proof
-      storeCell = store;
-      proofCell = `<span class="proof-label">-</span>`;
-    } else if(store==='B2B'){
-      // B2B: show client under store, show quotation/invoice in proof cell
-      const client = latest && latest.clientName ? latest.clientName : '';
-      const quot = latest && latest.quotationNo ? latest.quotationNo : '-';
-      const inv = latest && latest.invoiceNo ? latest.invoiceNo : '-';
-      storeCell = `${store}${client?`<div style="font-size:13px;color:var(--muted);margin-top:4px">${client}</div>`:''}`;
-      proofCell = `<div style="font-size:13px;color:var(--muted)">Q: ${quot} • Inv: ${inv}</div>`;
-    } else {
-      // default stores: show small preview + count
-      const tinyPreview = (proofCount>0 && latest.proofImages[0]) ? `<img src="${latest.proofImages[0]}" class="img-thumb tiny" alt="proof" onclick="window.open('${latest.proofImages[0]}','_blank')" style="margin-right:8px">` : '';
-      const proofLabel = proofCount>0 ? `<span class="proof-label">${proofCount} image${proofCount>1?'s':''}</span>` : `<span class="proof-label">No Proof</span>`;
-      proofCell = `${tinyPreview}${proofLabel}`;
-    }
-
-    tr.innerHTML = `
-      <td>${dateCell}</td>
-      <td>${storeCell}</td>
-      <td>${statusHtml}</td>
-      <td>${total}</td>
-      <td>${time}</td>
-      <td>${proofCell}</td>
-      <td class="actions-cell"><button class="action-btn" data-store="${store}" onclick="viewSubmission('${store}')">View</button>
-        ${latest? `<button class="action-btn" onclick="editSubmission(${latest.id})">Edit</button>` : ''}
-        ${latest? `<button class="action-btn" onclick="deleteRecord(${latest.id})">Delete</button>` : ''}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
+// renderDetailedDashboard removed — superseded by _renderDashboard which reads live Sheet data
 
 function switchAdminTab(tab){
   const map = {
@@ -1221,8 +1318,29 @@ function renderHistory(){
   const range = $('histRange').value || 'all';
   const from = $('histFrom').value; const to = $('histTo').value;
 
-  // load all live submissions and legacy bookkeeping records
-  let rows = loadSubmissions().filter(r=> r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping');
+  // Merge live Google Sheet data (if cached) with localStorage records.
+  // Sheet data is the source of truth for retail sales; localStorage keeps
+  // any records not yet in the Sheet (e.g. just submitted and not yet fetched).
+  let rows = [];
+  if(_liveDataCache && _liveDataCache.length){
+    // Use Sheet data as primary source, ensure mapping
+    rows = _liveDataCache.slice().map(ensureMapped).filter(r=>r!==null);
+    // normalize dates to Malaysia YYYY-MM-DD
+    rows = rows.map(r=>{ r.date = normalizeSheetDate(r.date); return r; });
+    // Append localStorage-only records that aren't already represented
+    const localSubs = loadSubmissions().filter(r => r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping');
+    localSubs.forEach(ls => {
+      const lsm = ensureMapped(ls);
+      if(!lsm) return;
+      lsm.date = normalizeSheetDate(lsm.date);
+      // A local record not in cache (e.g. freshly submitted before next fetch) — include it
+      const alreadyInSheet = rows.some(sr => sr.store === lsm.store && sr.date === lsm.date && Math.abs((sr.total||0)-(lsm.total||0)) < 0.01);
+      if(!alreadyInSheet) rows.push(lsm);
+    });
+  } else {
+    // No live cache — fall back entirely to localStorage, normalize shapes
+    rows = loadSubmissions().filter(r=> r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping').map(ensureMapped).filter(r=>r!==null).map(r=>{ r.date = normalizeSheetDate(r.date); return r; });
+  }
 
   // apply store filter
   if(store && store!=='ALL') rows = rows.filter(r=>r.store===store);
@@ -1250,26 +1368,34 @@ function renderHistory(){
     return; 
   }
   
-  rows.sort((a,b)=> b.date.localeCompare(a.date) || b.submittedAt - a.submittedAt);
+  rows.sort((a,b)=> (b.date||'').localeCompare(a.date||'') || ((b.submittedAt||0) - (a.submittedAt||0)));
   
   const displayRows = historyShowAll ? rows : rows.slice(0, 5);
   
-  displayRows.forEach(r=>{
+  // Expose the current display rows so action handlers can reference them by index
+  window._historyDisplayRows = displayRows;
+  displayRows.forEach((r, idx)=>{
     const tr = document.createElement('tr');
     const totalStr = `RM ${formatMoney(r.total||0)}`;
     let statusRemark = r.remarks || '-';
     if ((r.total || 0) === 0) {
       statusRemark = `<span class="status-badge status-nosales" style="margin:0;display:inline-block">No Sale</span>`;
     }
-    
+    // Always render action buttons for each row. Bind by index so even sheet rows (no local id)
+    // receive their own buttons and won't float or be shared across rows.
+    const actionsHtml = `
+      <div style="white-space:nowrap">
+        <button class="action-btn" type="button" onclick="viewHistoryRow(${idx})">View</button>
+        <button class="action-btn" type="button" onclick="editHistoryRow(${idx})">Edit</button>
+        <button class="action-btn" type="button" onclick="deleteHistoryRow(${idx})">Delete</button>
+      </div>`;
+
     tr.innerHTML = `
       <td>${formatDate(r.date)}</td>
       <td>${r.store||'-'}</td>
       <td style="font-weight:600">${totalStr}</td>
       <td>${statusRemark}</td>
-      <td class="actions-cell"><button class="action-btn" onclick="viewRecord(${r.id})">View</button>
-        ${r.id?` <button class="action-btn" onclick="editSubmission(${r.id})">Edit</button>`:''}
-        ${r.id?` <button class="action-btn" onclick="deleteRecord(${r.id})">Delete</button>`:''}</td>
+      <td class="actions-cell">${actionsHtml}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1308,6 +1434,123 @@ function viewRecord(id){
   body.innerHTML = html; footer.innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="secondary" onclick="closeEditModal()">Close</button></div>`;
   $('editModal').classList.add('show');
 }
+
+// View/Edit/Delete handlers for rows rendered in Sales History table.
+// These operate on `window._historyDisplayRows` (set by `renderHistory`) and use the
+// display index so every row has its own buttons, including sheet/live rows.
+window.viewHistoryRow = function(idx){
+  const rows = window._historyDisplayRows || [];
+  const rec = rows[idx];
+  if(!rec) return alert('Record not found');
+  const body = $('editCardBody'); const footer = $('editCardFooter');
+  let html = `<h3>${rec.store} — ${rec.status||''}</h3>`;
+  html += `<p><strong>Date:</strong> ${formatDate(rec.date)}</p>`;
+  html += `<p><strong>Time:</strong> ${rec.time||''}</p>`;
+  html += `<p><strong>Total:</strong> RM ${formatMoney(rec.total||0)}</p>`;
+  if(rec.store !== 'TikTok' && rec.store !== 'B2B') {
+    html += `<p><strong>Cash:</strong> RM ${formatMoney(rec.cash||0)}</p>`;
+    html += `<p><strong>QR/Online:</strong> RM ${formatMoney(rec.qr||0)}</p>`;
+    html += `<p><strong>Card:</strong> RM ${formatMoney(rec.card||0)}</p>`;
+  }
+  if(rec.clientName) html += `<p><strong>Client:</strong> ${rec.clientName}</p>`;
+  if(rec.remarks) html += `<p><strong>Remarks:</strong> ${rec.remarks}</p>`;
+  if(Array.isArray(rec.proofImages) && rec.proofImages.length){ html += `<div class="proof-count">${rec.proofImages.length} image${rec.proofImages.length>1?'s':''}</div><div class="gallery-container">`; rec.proofImages.forEach((p,i)=> html += `<div class="gallery-item"><img src="${p}" alt="p${i}" onclick="window.open('${p}','_blank')"></div>`); html += `</div>` }
+  body.innerHTML = html;
+  footer.innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="secondary" onclick="closeEditModal()">Close</button></div>`;
+  $('editModal').classList.add('show');
+};
+
+window.editHistoryRow = function(idx){
+  const rows = window._historyDisplayRows || [];
+  const rec = rows[idx];
+  if(!rec) return alert('Record not found');
+  // If the record exists locally (has an id and not flagged from sheet), delegate to edit flow.
+  if(rec.id && !rec._fromSheet){
+    if(typeof window.editSubmission === 'function') return window.editSubmission(rec.id);
+    return alert('Edit function not available for local records.');
+  }
+  // For live sheet rows, present an edit form and send update to Apps Script
+  if(!rec._fromSheet || !rec.rowNumber) return alert('Cannot edit this record');
+  const body = $('editCardBody'); const footer = $('editCardFooter');
+  body.innerHTML = `
+    <h3>Edit Sheet Record</h3>
+    <form id="sheetEditForm">
+      <label class="label">Store</label>
+      <input id="sheet_edit_store" class="input" value="${rec.store||''}">
+      <label class="label">Cash</label>
+      <input id="sheet_edit_cash" class="input" type="number" step="0.01" value="${rec.cash||0}">
+      <label class="label">QR/Online</label>
+      <input id="sheet_edit_qr" class="input" type="number" step="0.01" value="${rec.qr||0}">
+      <label class="label">Card</label>
+      <input id="sheet_edit_card" class="input" type="number" step="0.01" value="${rec.card||0}">
+      <label class="label">Remarks</label>
+      <textarea id="sheet_edit_remarks" class="textarea">${rec.remarks||''}</textarea>
+    </form>
+  `;
+  footer.innerHTML = `<div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="secondary" id="sheet_edit_cancel">Cancel</button><button type="button" class="primary" id="sheet_edit_save">Save</button></div>`;
+  $('editModal').classList.add('show');
+  document.getElementById('sheet_edit_cancel').addEventListener('click', closeEditModal);
+  document.getElementById('sheet_edit_save').addEventListener('click', async function(){
+    const store = document.getElementById('sheet_edit_store').value || '';
+    const cash = parseNum(document.getElementById('sheet_edit_cash').value);
+    const qr = parseNum(document.getElementById('sheet_edit_qr').value);
+    const card = parseNum(document.getElementById('sheet_edit_card').value);
+    const remarks = document.getElementById('sheet_edit_remarks').value || '';
+    const payload = { action: 'edit', rowNumber: rec.rowNumber, store, cash, qr, card, remarks };
+    try{
+      const resp = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(payload) });
+      const j = await resp.json();
+      if(j && j.status==='success'){
+        closeEditModal();
+        // refresh live data and views
+        await renderDashboard();
+        renderHistory();
+        alert('Record updated in Google Sheet.');
+      } else {
+        alert('Update failed: ' + (j && j.message ? j.message : 'Unknown error'));
+      }
+    }catch(err){ alert('Update failed: ' + err); }
+  });
+};
+
+window.deleteHistoryRow = function(idx){
+  const rows = window._historyDisplayRows || [];
+  const rec = rows[idx];
+  if(!rec) return alert('Record not found');
+  if(rec.id && !rec._fromSheet){
+    if(!confirm('Delete this local record?')) return;
+    // try to delete via existing helper if present
+    if(typeof window.deleteLiveSubmission === 'function'){
+      return window.deleteLiveSubmission(rec.id);
+    }
+    // fallback: remove from localStorage
+    const subs = loadSubmissions(); const i = subs.findIndex(s=>s.id==rec.id);
+    if(i===-1) return alert('Record not found in local storage');
+    subs.splice(i,1); saveSubmissions(subs); renderHistory(); renderDashboard();
+    return;
+  }
+  // For sheet rows, send delete request to Apps Script
+  if(rec._fromSheet && rec.rowNumber){
+    if(!confirm('Delete this record from Google Sheet?')) return;
+    (async ()=>{
+      try{
+        const payload = { action: 'delete', rowNumber: rec.rowNumber };
+        const resp = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(payload) });
+        const j = await resp.json();
+        if(j && j.status==='success'){
+          // refresh views
+          await renderDashboard();
+          renderHistory();
+          alert('Record deleted from Google Sheet.');
+        } else {
+          alert('Delete failed: ' + (j && j.message ? j.message : 'Unknown error'));
+        }
+      }catch(err){ alert('Delete failed: ' + err); }
+    })();
+    return;
+  }
+  alert('Cannot delete this record.');
+};
 
 // --- B2B Records logic ---
 function renderB2B(){
