@@ -800,7 +800,7 @@ function makeSalesHistoryExportFilename(opts){
     const to = formatDate(opts.endDate);
     rangeLabel = from === to ? from : `${from} to ${to}`;
   }
-  return `KUL Gifts Sales History - ${storeLabel} - ${rangeLabel}.xlsx`;
+  return `KUL Gifts Sales History - ${storeLabel} - ${rangeLabel}.csv`;
 }
 
 function getSalesHistorySourceRows(opts){
