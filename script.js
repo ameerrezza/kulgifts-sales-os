@@ -43,6 +43,15 @@ function init(){
   const storeSelect = $('storeSelect');
   storeSelect.innerHTML = '<option value="" selected>Pick your store</option>' + STORES.map(s=>`<option value="${s}">${s}</option>`).join('');
 
+  const logo = $('logo');
+  if(logo){
+    logo.style.cursor = 'pointer';
+    logo.addEventListener('click', () => {
+      closeAdmin();
+      resetForm();
+    });
+  }
+
   // initial progressive state: show only store select
   $('salesQuestion').classList.add('hidden');
   $('salesFields').classList.add('hidden');
@@ -87,6 +96,7 @@ function init(){
     // re-render dashboard immediately when store filter changes
     exportStoreSel.addEventListener('change', function(){ renderDashboard(); });
     const importBtn = $('importBtn'); if(importBtn) importBtn.addEventListener('click', importCSV);
+    const telegramBtn = $('sendTelegramSummaryBtn'); if(telegramBtn){ telegramBtn.addEventListener('click', sendTelegramSummary); }
   }
 
   // admin
@@ -754,20 +764,13 @@ function confirmLegacyCSVImport(){
 }
 
 function exportSalesHistoryCSV(opts){
-  const all = loadSubmissions();
-  let rows = all.filter(r=> r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping');
-  
   if(!opts) opts = {};
-  if(!opts.all){
-    if(opts.startDate && opts.endDate){
-      rows = rows.filter(r=> r.date >= opts.startDate && r.date <= opts.endDate);
-    }
-  }
-  if(opts.store && opts.store!=='ALL') rows = rows.filter(r=> r.store===opts.store);
+  const { sourceCount, rows } = getSalesHistorySourceRows(opts);
+  const selectedRange = opts.all ? 'all_time' : (opts.startDate && opts.endDate ? `${opts.startDate}_to_${opts.endDate}` : getToday());
+  const selectedStore = opts.store || 'ALL';
+  console.log('exportSalesHistoryCSV', { sourceCount, filteredCount: rows.length, selectedRange, selectedStore });
 
-  rows.sort((a,b)=>a.date.localeCompare(b.date) || (a.submittedAt - b.submittedAt));
-
-  const headers = ['Date','Store','Cash','QR','Card','Total','Remarks'];
+  const headers = ['date','store','cash','qr','card','total','remarks','submittedAt'];
   const lines = [headers.join(',')];
   rows.forEach(r=>{
     const vals = [
@@ -777,17 +780,60 @@ function exportSalesHistoryCSV(opts){
       (r.qr || 0).toFixed(2),
       (r.card || 0).toFixed(2),
       (r.total || 0).toFixed(2),
-      r.remarks || ''
+      r.remarks || '',
+      r.submittedAt || ''
     ].map(escapeCSV);
     lines.push(vals.join(','));
   });
   
   const csv = lines.join('\n');
-  const ts = new Date().toISOString().replace(/[:.]/g,'-');
-  const rangeLabel = opts.startDate && opts.endDate ? `${opts.startDate}_to_${opts.endDate}` : (opts.all? 'all_time' : getToday());
-  const storeLabel = opts.store && opts.store!=='ALL' ? opts.store.replace(/\s+/g,'_') : 'all_stores';
-  const name = `kul_sales_history_${rangeLabel}_${storeLabel}_${ts}.csv`;
+  const name = makeSalesHistoryExportFilename(opts);
   downloadCSV(name,csv);
+}
+
+function makeSalesHistoryExportFilename(opts){
+  opts = opts || {};
+  const storeLabel = (opts.store && opts.store !== 'ALL') ? opts.store : 'All Stores';
+  let rangeLabel = 'All Time';
+  if(!opts.all && opts.startDate && opts.endDate){
+    const from = formatDate(opts.startDate);
+    const to = formatDate(opts.endDate);
+    rangeLabel = from === to ? from : `${from} to ${to}`;
+  }
+  return `KUL Gifts Sales History - ${storeLabel} - ${rangeLabel}.xlsx`;
+}
+
+function getSalesHistorySourceRows(opts){
+  opts = opts || {};
+  let sourceRows = [];
+  const liveCache = Array.isArray(_liveDataCache) ? _liveDataCache : [];
+
+  if(liveCache.length){
+    sourceRows = liveCache.slice().map(ensureMapped).filter(r=>r!==null).map(r=>{ r.date = normalizeSheetDate(r.date); return r; });
+    const localSubs = loadSubmissions().filter(r=> r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping');
+    localSubs.forEach(ls => {
+      const lsm = ensureMapped(ls);
+      if(!lsm) return;
+      lsm.date = normalizeSheetDate(lsm.date);
+      const alreadyInSheet = sourceRows.some(sr => sr.store===lsm.store && sr.date===lsm.date && Math.abs((sr.total||0)-(lsm.total||0)) < 0.01);
+      if(!alreadyInSheet) sourceRows.push(lsm);
+    });
+  } else {
+    sourceRows = loadSubmissions().filter(r=> r.recordType===undefined || r.recordType==='live_submission' || r.recordType==='legacy_bookkeeping').map(ensureMapped).filter(r=>r!==null).map(r=>{ r.date = normalizeSheetDate(r.date); return r; });
+  }
+
+  let rows = sourceRows.filter(r=> r.date && r.store);
+  if(opts.store && opts.store!=='ALL') rows = rows.filter(r=> r.store===opts.store);
+  if(!opts.all){
+    if(opts.startDate && opts.endDate){
+      const start = normalizeSheetDate(opts.startDate);
+      const end = normalizeSheetDate(opts.endDate);
+      rows = rows.filter(r=> r.date >= start && r.date <= end);
+    }
+  }
+
+  rows.sort((a,b)=> a.date.localeCompare(b.date) || ((a.submittedAt||0) - (b.submittedAt||0)));
+  return { sourceCount: sourceRows.length, rows };
 }
 
 // --- Settings: backup, reset, system info ---
@@ -928,6 +974,29 @@ async function handleSubmit(e){
     renderHistory();
     console.log('Dashboard re-rendered after submit');
   })();
+}
+
+async function sendTelegramSummary(){
+  try {
+    const response = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'telegramSummary' })
+    });
+    if(!response.ok){
+      throw new Error(`Request failed (${response.status})`);
+    }
+    const data = await response.json();
+    if(data && data.status === 'success'){
+      alert('Telegram summary sent.');
+    } else {
+      const msg = data && data.message ? data.message : 'Unknown response from server.';
+      throw new Error(msg);
+    }
+  } catch (err){
+    console.error('Telegram summary send failed:', err);
+    alert('Error sending telegram summary: ' + (err.message || err));
+  }
 }
 
 function showSaved(item, syncMsg){
@@ -1637,19 +1706,29 @@ function downloadCSV(filename, csv){
 }
 
 function exportCSV(opts){
-  const all = loadSubmissions();
-  let rows = all;
   if(!opts) opts = {};
-  if(!opts.all){
-    if(opts.startDate && opts.endDate){
-      rows = rows.filter(r=> r.date >= opts.startDate && r.date <= opts.endDate);
-    } else if(opts.date){
-      rows = rows.filter(r=> r.date===opts.date);
-    }
-  }
-  if(opts.store && opts.store!=='ALL') rows = rows.filter(r=> r.store===opts.store);
+  const { sourceCount, rows } = getSalesHistorySourceRows(opts);
+  const selectedRange = opts.all ? 'all_time' : (opts.startDate && opts.endDate ? `${opts.startDate}_to_${opts.endDate}` : getToday());
+  const selectedStore = opts.store || 'ALL';
+  console.log('exportCSV', { sourceCount, filteredCount: rows.length, selectedRange, selectedStore });
 
-  const csv = toCSV(rows);
+  const headers = ['date','store','cash','qr','card','total','remarks','submittedAt'];
+  const lines = [headers.join(',')];
+  rows.forEach(r=>{
+    const vals = [
+      r.date || '',
+      r.store || '',
+      (r.cash || 0).toFixed(2),
+      (r.qr || 0).toFixed(2),
+      (r.card || 0).toFixed(2),
+      (r.total || 0).toFixed(2),
+      r.remarks || '',
+      r.submittedAt || ''
+    ].map(escapeCSV);
+    lines.push(vals.join(','));
+  });
+
+  const csv = lines.join('\n');
   const ts = new Date().toISOString().replace(/[:.]/g,'-');
   const rangeLabel = opts.startDate && opts.endDate ? `${opts.startDate}_to_${opts.endDate}` : (opts.all? 'all_time' : getToday());
   const storeLabel = opts.store && opts.store!=='ALL' ? opts.store.replace(/\s+/g,'_') : 'all_stores';
