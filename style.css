@@ -419,7 +419,51 @@ input[type="file"]{padding:10px;font-size:14px;cursor:pointer}
 
 @media(max-width:599px){
   .admin-section .overview-grid{grid-template-columns:repeat(1,1fr)}
-  .admin-section .table-inner{min-width:640px}
+  .admin-section .table-inner{min-width:auto}
+  .admin-section .card{width:100%; padding:16px}
+  .admin-section .modal-card{width:min(92vw, 100%)}
+  .dashboard-header{flex-direction:column;align-items:flex-start;gap:10px}
+  .dashboard-header h2{width:100%;margin:0}
+  .dashboard-header .status-badge{order:2;width:auto;align-self:flex-start;white-space:normal}
+  .dashboard-header button{width:100%;max-width:100%;margin:0}
+  .dashboard-header button + button{margin-top:8px}
+  .admin-tools{padding:12px;gap:10px}
+  .admin-tools .admin-controls-row{flex-direction:column;align-items:stretch}
+  .admin-tools .admin-controls-row > *{width:100%}
+  .admin-tools .controls-top{gap:12px}
+  .admin-tools .controls-right{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .admin-tools .controls-right button{width:100%}
+  .admin-section .overview-grid .card{padding:16px}
+  .admin-section .table-wrap{border-radius:14px;overflow:hidden}
+  #statusTable,#historyTable,#legacyTable{width:100%;border:none}
+  #statusTable thead,#historyTable thead,#legacyTable thead{display:none}
+  #statusTable tbody tr,#historyTable tbody tr,#legacyTable tbody tr{display:block;border:1px solid var(--border);border-radius:14px;background:var(--card);margin-bottom:12px;padding:14px}
+  #statusTable tbody td,#historyTable tbody td,#legacyTable tbody td{display:block;width:100%;padding:8px 0;border:none}
+  #statusTable tbody td::before,#historyTable tbody td::before,#legacyTable tbody td::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+  #statusTable tbody tr td:nth-child(1)::before{content:'Date'}
+  #statusTable tbody tr td:nth-child(2)::before{content:'Store'}
+  #statusTable tbody tr td:nth-child(3)::before{content:'Status'}
+  #statusTable tbody tr td:nth-child(4)::before{content:'Total Sales'}
+  #statusTable tbody tr td:nth-child(5)::before{content:'Submitted Time'}
+  #historyTable tbody tr td:nth-child(1)::before{content:'Date'}
+  #historyTable tbody tr td:nth-child(2)::before{content:'Store'}
+  #historyTable tbody tr td:nth-child(3)::before{content:'Total Sales'}
+  #historyTable tbody tr td:nth-child(4)::before{content:'Status/Remark'}
+  #historyTable tbody tr td:nth-child(5)::before{content:'Actions'}
+  #legacyTable tbody tr td:nth-child(1)::before{content:'Select'}
+  #legacyTable tbody tr td:nth-child(2)::before{content:'Date'}
+  #legacyTable tbody tr td:nth-child(3)::before{content:'Store'}
+  #legacyTable tbody tr td:nth-child(4)::before{content:'Cash'}
+  #legacyTable tbody tr td:nth-child(5)::before{content:'QR/Online'}
+  #legacyTable tbody tr td:nth-child(6)::before{content:'Credit Card'}
+  #legacyTable tbody tr td:nth-child(7)::before{content:'Total Sales'}
+  #legacyTable tbody tr td:nth-child(8)::before{content:'Source'}
+  #legacyTable tbody tr td:nth-child(9)::before{content:'Remarks'}
+  #legacyTable tbody tr td:nth-child(10)::before{content:'Actions'}
+  .actions-cell{display:flex;flex-direction:column;gap:8px}
+  .actions-cell .action-btn{width:100%;margin:0}
+  .admin-section #historyTable tbody tr{border:none}
+  .admin-section #historyTable tbody td{padding:10px 0}
 }
 
 /* Small visual polish for admin tabs */
