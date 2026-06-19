@@ -105,8 +105,12 @@ function init(){
   $('adminCancel').addEventListener('click', ()=>adminModal.classList.remove('show'));
   $('adminEnter').addEventListener('click', adminEnter);
   $('closeAdmin').addEventListener('click', closeAdmin);
-  const syncBtn = $('syncNowBtn'); if(syncBtn) syncBtn.addEventListener('click', async ()=>{ await doManualSync(); });
-  if(syncBtn) syncBtn.addEventListener('click', ()=> console.log('Sync Now clicked'));
+  const syncBtn = $('syncNowBtn');
+  if(syncBtn) syncBtn.addEventListener('click', async function(e){
+    try{ e.preventDefault(); e.stopPropagation(); }catch(err){}
+    console.log('Sync Now clicked');
+    await doManualSync();
+  });
   // close modal when clicking outside the modal card
   adminModal.addEventListener('click', function(e){ if(e.target === adminModal) adminModal.classList.remove('show'); });
   const editModalEl = $('editModal');
@@ -1148,38 +1152,65 @@ function getRowField(row, names){
 }
 
 async function fetchLiveData(){
-  const url = GAS_URL + '?_=' + Date.now();
-  console.log('Fetching live data...');
-  try {
-    const resp = await fetch(url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
-    if (!resp.ok) throw new Error('Network response was not ok');
-    const data = await resp.json();
-    console.log('fetchLiveData raw response:', data);
-    if(Array.isArray(data)){
-      console.log('Live data fetched: ' + data.length + ' records');
-      // Normalize dates in every row
-      data.forEach(row => {
-        console.log('fetchLiveData row keys:', Object.keys(row));
-        // normalize any date-like fields found
-        const d = getRowField(row, ['Date','date']);
-        if(d) {
-          const norm = normalizeSheetDate(d);
-          // write back to same key name if exists, otherwise add 'date'
-          if(row.hasOwnProperty('Date')) row['Date'] = norm;
-          else if(row.hasOwnProperty('date')) row['date'] = norm;
-          else row['date'] = norm;
-          console.log('normalized date for row ->', norm);
-        }
-      });
-      // record last successful fetch timestamp so UI can show last-synced
-      try{ localStorage.setItem('kul_last_synced', String(Date.now())); if(typeof updateLastSyncedUI === 'function') updateLastSyncedUI(); }catch(e){/*ignore*/}
-      return data;
+  const callbackName = '__kul_live_data_callback_' + Date.now() + '_' + Math.floor(Math.random()*1000000);
+  const url = GAS_URL + '?callback=' + callbackName + '&_=' + Date.now();
+  console.log('GAS_URL', GAS_URL);
+  console.log('Fetching live data via JSONP...');
+  console.log('JSONP url', url);
+
+  return new Promise((resolve) => {
+    let cleanupCalled = false;
+    const timeoutMs = 15000;
+    let timeoutId = setTimeout(() => {
+      cleanup();
+      console.error('Sync failed: JSONP timeout');
+      resolve(null);
+    }, timeoutMs);
+
+    function cleanup(){
+      if(cleanupCalled) return;
+      cleanupCalled = true;
+      clearTimeout(timeoutId);
+      const script = document.getElementById(callbackName + '_script');
+      if(script && script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[callbackName]; } catch(e) { window[callbackName] = undefined; }
     }
-    return null;
-  } catch (e) {
-    console.error('Sync failed:', e);
-    return null;
-  }
+
+    window[callbackName] = function(data){
+      cleanup();
+      console.log('fetchLiveData raw response:', data);
+      if(Array.isArray(data)){
+        console.log('Live data fetched: ' + data.length + ' records');
+        data.forEach(row => {
+          console.log('fetchLiveData row keys:', Object.keys(row));
+          const d = getRowField(row, ['Date','date']);
+          if(d) {
+            const norm = normalizeSheetDate(d);
+            if(row.hasOwnProperty('Date')) row['Date'] = norm;
+            else if(row.hasOwnProperty('date')) row['date'] = norm;
+            else row['date'] = norm;
+            console.log('normalized date for row ->', norm);
+          }
+        });
+        try{ localStorage.setItem('kul_last_synced', String(Date.now())); if(typeof updateLastSyncedUI === 'function') updateLastSyncedUI(); }catch(e){/*ignore*/}
+        resolve(data);
+        return;
+      }
+      console.error('Sync failed: JSONP returned non-array data');
+      resolve(null);
+    };
+
+    const script = document.createElement('script');
+    script.id = callbackName + '_script';
+    script.src = url;
+    script.async = true;
+    script.onerror = function(event){
+      cleanup();
+      console.error('Sync failed: JSONP script load error', event);
+      resolve(null);
+    };
+    document.head.appendChild(script);
+  });
 }
 
 // Render the dashboard store-status table and overview cards.
