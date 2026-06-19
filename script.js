@@ -105,6 +105,7 @@ function init(){
   $('adminCancel').addEventListener('click', ()=>adminModal.classList.remove('show'));
   $('adminEnter').addEventListener('click', adminEnter);
   $('closeAdmin').addEventListener('click', closeAdmin);
+  const syncBtn = $('syncNowBtn'); if(syncBtn) syncBtn.addEventListener('click', async ()=>{ await doManualSync(); });
   // close modal when clicking outside the modal card
   adminModal.addEventListener('click', function(e){ if(e.target === adminModal) adminModal.classList.remove('show'); });
   const editModalEl = $('editModal');
@@ -191,6 +192,25 @@ function init(){
 
 
   renderMissingHints();
+
+  // Try to unregister any service workers to avoid serving stale cached assets in installed PWAs.
+  if('serviceWorker' in navigator){
+    try{
+      navigator.serviceWorker.getRegistrations().then(regs=>{
+        regs.forEach(r=>{
+          r.unregister().then(()=> console.log('Service worker unregistered')).catch(()=>{});
+        });
+      });
+    }catch(e){ console.warn('Service worker unregister failed', e); }
+  }
+
+  // Update visible last-synced UI and immediately attempt to fetch live data and render views.
+  if(typeof updateLastSyncedUI === 'function') updateLastSyncedUI();
+  (async ()=>{
+    try{ await renderDashboard(); }catch(e){ console.warn('Initial renderDashboard failed', e); }
+    try{ renderHistory(); }catch(e){}
+    try{ renderB2B(); }catch(e){}
+  })();
 
   // Existing Bookkeeping UI simplified (no accordions)
 }
@@ -867,6 +887,43 @@ function updateSystemInfo(){
   $('sys_backup').textContent = last ? new Date(Number(last)).toLocaleString() : '-';
 }
 
+function updateLastSyncedUI(){
+  const el = document.getElementById('lastSynced');
+  const ts = localStorage.getItem('kul_last_synced');
+  if(!el) return;
+  if(ts){
+    try{
+      const t = new Date(Number(ts));
+      const timeOnly = t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      el.textContent = 'Last synced: ' + timeOnly;
+    } catch(e){ el.textContent = 'Last synced: -'; }
+  } else {
+    el.textContent = 'Last synced: -';
+  }
+}
+
+async function doManualSync(){
+  const statusEl = document.getElementById('liveStatus');
+  if(statusEl){ statusEl.textContent = '⟳ Syncing...'; statusEl.style.background = '#eef2ff'; statusEl.style.color = '#1e3a8a'; statusEl.classList.remove('hidden'); }
+  try{
+    const liveData = await fetchLiveData();
+    if(liveData && Array.isArray(liveData)){
+      _liveDataCache = liveData.map(mapSheetRow).filter(r=>r!==null);
+      if(statusEl){ statusEl.textContent = '✓ Live data synced'; statusEl.style.background = '#d1fae5'; statusEl.style.color = '#065f46'; statusEl.classList.remove('hidden'); }
+      try{ localStorage.setItem('kul_last_synced', String(Date.now())); }catch(e){}
+      updateLastSyncedUI();
+      await renderDashboard();
+      renderHistory();
+      renderB2B();
+      return true;
+    }
+  }catch(e){ console.warn('Manual sync failed', e); }
+  if(statusEl){ statusEl.textContent = '⚠ Offline — local data'; statusEl.style.background = '#fef3c7'; statusEl.style.color = '#92400e'; statusEl.classList.remove('hidden'); }
+  // fallback render
+  await renderDashboard(); renderHistory(); renderB2B();
+  return false;
+}
+
 function performResetIfAuthorized(){
   const txt = $('resetConfirmText').value.trim(); const pass = $('resetAdminPass').value||'';
   if(txt!=='DELETE'){ alert('Type DELETE to confirm'); return }
@@ -1092,7 +1149,7 @@ function getRowField(row, names){
 async function fetchLiveData(){
   const url = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
     if (!resp.ok) throw new Error('Network response was not ok');
     const data = await resp.json();
     console.log('fetchLiveData raw response:', data);
@@ -1111,6 +1168,8 @@ async function fetchLiveData(){
           console.log('normalized date for row ->', norm);
         }
       });
+      // record last successful fetch timestamp so UI can show last-synced
+      try{ localStorage.setItem('kul_last_synced', String(Date.now())); if(typeof updateLastSyncedUI === 'function') updateLastSyncedUI(); }catch(e){/*ignore*/}
       return data;
     }
     return null;
