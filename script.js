@@ -106,6 +106,7 @@ function init(){
   $('adminEnter').addEventListener('click', adminEnter);
   $('closeAdmin').addEventListener('click', closeAdmin);
   const syncBtn = $('syncNowBtn'); if(syncBtn) syncBtn.addEventListener('click', async ()=>{ await doManualSync(); });
+  if(syncBtn) syncBtn.addEventListener('click', ()=> console.log('Sync Now clicked'));
   // close modal when clicking outside the modal card
   adminModal.addEventListener('click', function(e){ if(e.target === adminModal) adminModal.classList.remove('show'); });
   const editModalEl = $('editModal');
@@ -1147,13 +1148,15 @@ function getRowField(row, names){
 }
 
 async function fetchLiveData(){
-  const url = 'https://script.google.com/macros/s/AKfycbzYTeDuYvf-DPc92dtPnhDMoUDX7LC64dOuW_Lu-q7O-9iYSTXD9UWwC7a3iu7zFUiK1w/exec';
+  const url = GAS_URL + '?_=' + Date.now();
+  console.log('Fetching live data...');
   try {
     const resp = await fetch(url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
     if (!resp.ok) throw new Error('Network response was not ok');
     const data = await resp.json();
     console.log('fetchLiveData raw response:', data);
     if(Array.isArray(data)){
+      console.log('Live data fetched: ' + data.length + ' records');
       // Normalize dates in every row
       data.forEach(row => {
         console.log('fetchLiveData row keys:', Object.keys(row));
@@ -1174,7 +1177,7 @@ async function fetchLiveData(){
     }
     return null;
   } catch (e) {
-    console.error('Failed to fetch live data:', e);
+    console.error('Sync failed:', e);
     return null;
   }
 }
